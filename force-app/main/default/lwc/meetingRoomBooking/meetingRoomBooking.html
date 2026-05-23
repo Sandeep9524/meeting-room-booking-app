@@ -1,28 +1,208 @@
 <template>
-    <lightning-card title="Meeting Room Booking">
+    <lightning-card title="Meeting Room Booking System" icon-name="standard:event">
+        <div class="slds-m-around_medium">
+            <lightning-tabset active-tab-value={activeTab} onselect={handleTabChange}>
 
-        <div class="slds-p-around_medium">
+                <!-- ── Calendar View ── -->
+                <lightning-tab label="Calendar View" value="calendar">
+                    <div class="calendar-container">
+                        <div class="slds-grid slds-gutters slds-m-bottom_medium">
+                            <div class="slds-col slds-size_1-of-3">
+                                <div class="slds-form-element">
+                                    <label class="slds-form-element__label">Select Date</label>
+                                    <div class="slds-form-element__control">
+                                        <input type="date" class="slds-input"
+                                            value={selectedDate}
+                                            onchange={handleDateChange} />
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="slds-col slds-size_1-of-3">
+                                <lightning-combobox
+                                    label="Select Room"
+                                    value={selectedRoom}
+                                    options={roomOptions}
+                                    onchange={handleRoomChange}
+                                    placeholder="All Rooms">
+                                </lightning-combobox>
+                            </div>
+                            <div class="slds-col slds-size_1-of-3 slds-align-bottom">
+                                <lightning-button label="Today" onclick={handleTodayClick}
+                                    variant="neutral" class="slds-m-top_medium">
+                                </lightning-button>
+                            </div>
+                        </div>
 
-            <lightning-input
-                label="Room Name">
-            </lightning-input>
+                        <!-- Calendar Grid -->
+                        <div class="calendar-grid" style={gridStyle}>
+                            <div class="time-column-header">Time</div>
+                            <template for:each={filteredRooms} for:item="room">
+                                <div key={room.value} class="room-header">{room.label}</div>
+                            </template>
+                            <template for:each={timeSlots} for:item="slot">
+                                <div key={slot.time} class="calendar-row" role="row">
+                                    <div class="time-label" role="gridcell">{slot.label}</div>
+                                    <template for:each={slot.roomCells} for:item="cell">
+                                        <div key={cell.roomId}
+                                            class={cell.computedClass}
+                                            data-room={cell.roomId}
+                                            data-time={slot.time}
+                                            onclick={handleSlotClick}
+                                            title={cell.tooltip}
+                                            role="gridcell">
+                                            <template if:true={cell.isBooked}>
+                                                <div class="booking-info">
+                                                    <div class="booking-title">{cell.bookingTitle}</div>
+                                                    <div class="booking-time">{cell.timeRange}</div>
+                                                </div>
+                                            </template>
+                                        </div>
+                                    </template>
+                                </div>
+                            </template>
+                        </div>
 
-            <lightning-input
-                type="datetime"
-                label="Start Time">
-            </lightning-input>
+                        <!-- Legend -->
+                        <div class="slds-grid slds-gutters slds-m-top_medium">
+                            <div class="slds-col">
+                                <span class="legend-item"><span class="legend-box available"></span> Available</span>
+                                <span class="legend-item"><span class="legend-box booked"></span> Booked</span>
+                                <span class="legend-item"><span class="legend-box selected"></span> Selected</span>
+                            </div>
+                        </div>
+                    </div>
+                </lightning-tab>
 
-            <lightning-input
-                type="datetime"
-                label="End Time">
-            </lightning-input>
+                <!-- ── Create Booking ── -->
+                <lightning-tab label="Create Booking" value="create">
+                    <div class="slds-box slds-theme_default">
+                        <h3 class="slds-text-heading_small slds-m-bottom_medium">New Booking Details</h3>
 
-            <lightning-button
-                label="Book Room"
-                variant="brand">
-            </lightning-button>
+                        <template if:true={preselectedSlot}>
+                            <div class="slds-box slds-theme_info slds-m-bottom_medium">
+                                <p><strong>Selected:</strong> {preselectedSlot.room} at {preselectedSlot.timeLabel}</p>
+                                <lightning-button label="Clear Selection" onclick={clearPreselection}
+                                    variant="neutral" class="slds-m-top_small">
+                                </lightning-button>
+                            </div>
+                        </template>
 
+                        <template if:false={showFlow}>
+                            <div class="slds-grid slds-gutters slds-wrap">
+
+                                <!-- Row 1: Room + Employee -->
+                                <div class="slds-col slds-size_1-of-2">
+                                    <lightning-combobox label="Room Name"
+                                        value={formData.roomId} options={roomOptions}
+                                        onchange={handleRoomPick} required>
+                                    </lightning-combobox>
+                                </div>
+                                <div class="slds-col slds-size_1-of-2">
+                                    <lightning-input label="Employee Name"
+                                        value={formData.employeeName}
+                                        onchange={handleFormChange}
+                                        data-field="employeeName" required>
+                                    </lightning-input>
+                                </div>
+
+                                <!-- Row 2: Start Time (date + time side by side under one label) -->
+                                <div class="slds-col slds-size_1-of-2 slds-m-top_small">
+                                    <div class="slds-form-element">
+                                        <label class="slds-form-element__label">
+                                            <abbr class="slds-required" title="required">*</abbr> Start Time
+                                        </label>
+                                        <div class="slds-form-element__control datetime-compound">
+                                            <input type="date" class="slds-input datetime-date"
+                                                value={formData.startDate}
+                                                data-field="startDate"
+                                                onchange={handleRawInputChange} />
+                                            <input type="time" class="slds-input datetime-time"
+                                                value={formData.startTime24}
+                                                data-field="startTime24"
+                                                onchange={handleRawInputChange} />
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Row 2: End Time (date + time side by side under one label) -->
+                                <div class="slds-col slds-size_1-of-2 slds-m-top_small">
+                                    <div class="slds-form-element">
+                                        <label class="slds-form-element__label">
+                                            <abbr class="slds-required" title="required">*</abbr> End Time
+                                        </label>
+                                        <div class="slds-form-element__control datetime-compound">
+                                            <input type="date" class="slds-input datetime-date"
+                                                value={formData.endDate}
+                                                data-field="endDate"
+                                                onchange={handleRawInputChange} />
+                                            <input type="time" class="slds-input datetime-time"
+                                                value={formData.endTime24}
+                                                data-field="endTime24"
+                                                onchange={handleRawInputChange} />
+                                        </div>
+                                    </div>
+                                </div>
+
+                            </div>
+
+                            <div class="slds-m-top_medium">
+                                <lightning-button label="Check Availability"
+                                    onclick={checkAvailability} variant="neutral"
+                                    class="slds-m-right_small" disabled={isCreating}>
+                                </lightning-button>
+                                <lightning-button label="Create Booking"
+                                    onclick={createBooking} variant="brand"
+                                    disabled={isCreating}>
+                                </lightning-button>
+                            </div>
+                        </template>
+
+                        <template if:true={conflictMessage}>
+                            <div class="slds-box slds-theme_error slds-m-top_medium">
+                                <p><lightning-icon icon-name="utility:error" size="small"
+                                    class="slds-m-right_x-small"></lightning-icon> {conflictMessage}</p>
+                            </div>
+                        </template>
+                        <template if:true={successMessage}>
+                            <div class="slds-box slds-theme_success slds-m-top_medium">
+                                <p><lightning-icon icon-name="utility:success" size="small"
+                                    class="slds-m-right_x-small"></lightning-icon> {successMessage}</p>
+                            </div>
+                        </template>
+                    </div>
+                </lightning-tab>
+
+                <!-- ── All Bookings ── -->
+                <lightning-tab label="All Bookings" value="list">
+                    <div class="slds-box slds-theme_default">
+                        <div class="slds-grid slds-gutters slds-m-bottom_medium">
+                            <div class="slds-col">
+                                <h3 class="slds-text-heading_small">Current &amp; Upcoming Bookings</h3>
+                            </div>
+                            <div class="slds-col">
+                                <lightning-button label="Refresh" onclick={refreshBookings}
+                                    icon-name="utility:refresh" variant="neutral"
+                                    class="slds-float_right">
+                                </lightning-button>
+                            </div>
+                        </div>
+                        <template if:true={hasBookings}>
+                            <lightning-datatable key-field="Id" data={bookings}
+                                columns={columns} hide-checkbox-column>
+                            </lightning-datatable>
+                        </template>
+                        <template if:false={hasBookings}>
+                            <div class="slds-text-align_center slds-p-vertical_large">
+                                <p class="slds-text-color_weak">No bookings found</p>
+                            </div>
+                        </template>
+                    </div>
+                </lightning-tab>
+
+            </lightning-tabset>
         </div>
-
+        <template if:true={isLoading}>
+            <lightning-spinner alternative-text="Loading" size="medium"></lightning-spinner>
+        </template>
     </lightning-card>
 </template>

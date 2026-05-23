@@ -1,0 +1,41 @@
+<template>
+
+    <lightning-card title="Meeting Room Bookings">
+
+        <template if:true={bookings}>
+
+            <table class="slds-table slds-table_cell-buffer slds-table_bordered">
+
+                <thead>
+                    <tr>
+                        <th>Room</th>
+                        <th>Employee</th>
+                        <th>Start Time</th>
+                        <th>End Time</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+
+                    <template for:each={bookings} for:item="booking">
+
+                        <tr key={booking.Id}>
+
+                            <td>{booking.Name}</td>
+                            <td>{booking.Employee_Name__c}</td>
+                            <td>{booking.Start_Time__c}</td>
+                            <td>{booking.End_Time__c}</td>
+
+                        </tr>
+
+                    </template>
+
+                </tbody>
+
+            </table>
+
+        </template>
+
+    </lightning-card>
+
+</template>
