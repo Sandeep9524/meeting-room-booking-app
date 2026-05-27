@@ -5,18 +5,31 @@ public with sharing class BookingController {
      *   "YYYY-MM-DD HH:mm:ss"  — plain local string, parsed as ORG timezone by DateTime.valueOf()
      *   ISO-8601 with Z/offset — parsed as UTC/offset-aware
      */
+    // Use org timezone offset — org is now set to IST (UTC+5:30)
+
     private static DateTime parseDateTime(String s) {
         if (String.isBlank(s)) {
             throw new AuraHandledException('Empty datetime string');
         }
         try {
-            // Plain local string e.g. "2026-05-20 10:00:00" — no Z, no +offset
-            // DateTime.valueOf() treats this as the org's local timezone. Exactly what we want.
             if (!s.contains('Z') && !s.contains('+') &&
                 !(s.contains('T') && s.length() > 19)) {
-                return DateTime.valueOf(s);
+                // Parse "YYYY-MM-DD HH:mm:ss" as IST local time → convert to UTC
+                String datePart = s.split(' ')[0];
+                String timePart = s.split(' ')[1];
+                List<String> dp = datePart.split('-');
+                List<String> tp = timePart.split(':');
+                Integer yr  = Integer.valueOf(dp[0]);
+                Integer mo  = Integer.valueOf(dp[1]);
+                Integer dy  = Integer.valueOf(dp[2]);
+                Integer hr  = Integer.valueOf(tp[0]);
+                Integer mn  = Integer.valueOf(tp[1]);
+                Integer sec = tp.size() > 2 ? Integer.valueOf(tp[2]) : 0;
+                // Method 2 from verify script — the only method that gives correct UTC
+                DateTime asGmt   = DateTime.newInstanceGmt(yr, mo, dy, hr, mn, sec);
+                Integer  offsetMs = UserInfo.getTimeZone().getOffset(asGmt);
+                return asGmt.addSeconds(-(offsetMs / 1000));
             }
-            // ISO-8601 with timezone info — deserialise as UTC-aware
             return (DateTime) JSON.deserialize('"' + s + '"', DateTime.class);
         } catch (Exception e) {
             throw new AuraHandledException('Invalid datetime: ' + s + ' (' + e.getMessage() + ')');
@@ -34,12 +47,11 @@ public with sharing class BookingController {
 
     @AuraEnabled
     public static List<BookingWrapper> getBookings() {
-        DateTime todayStart = DateTime.newInstance(System.today(), Time.newInstance(0,0,0,0));
         List<Booking__c> rows = [
             SELECT Id, Name, Room_Name__c, Room_Name__r.Name,
                    Employee_Name__c, Start_Time__c, End_Time__c, Status__c
             FROM Booking__c
-            WHERE Start_Time__c >= :todayStart
+            WHERE Status__c = 'Booked'
             ORDER BY Start_Time__c ASC
             LIMIT 200
         ];
@@ -53,12 +65,14 @@ public with sharing class BookingController {
         try {
             DateTime startDT = parseDateTime(startTime);
             DateTime endDT   = parseDateTime(endTime);
+            DateTime nowDT   = DateTime.now(); // must be a variable — :DateTime.now() is invalid SOQL
             List<Booking__c> conflicts = [
                 SELECT Id FROM Booking__c
                 WHERE Room_Name__c = :roomId
                   AND Status__c    = 'Booked'
                   AND Start_Time__c < :endDT
                   AND End_Time__c   > :startDT
+                  AND End_Time__c   > :nowDT
                 LIMIT 1
             ];
             return conflicts.isEmpty();
@@ -79,18 +93,30 @@ public with sharing class BookingController {
                 throw new AuraHandledException('Cannot book a slot in the past.');
             }
 
-            // Double-check for conflicts before insert
+            // Double-check for conflicts before insert — ignore elapsed bookings
+            DateTime nowDT = DateTime.now();
             List<Booking__c> conflicts = [
                 SELECT Id FROM Booking__c
                 WHERE Room_Name__c = :roomId
                   AND Status__c    = 'Booked'
                   AND Start_Time__c < :endDT
                   AND End_Time__c   > :startDT
+                  AND End_Time__c   > :nowDT
                 LIMIT 1
             ];
             if (!conflicts.isEmpty()) {
+                // Fetch full details of the conflicting booking for a helpful error message
+                Booking__c clash = [
+                    SELECT Name, Employee_Name__c, Start_Time__c, End_Time__c
+                    FROM Booking__c WHERE Id = :conflicts[0].Id LIMIT 1
+                ];
+                String tzId       = UserInfo.getTimeZone().getID();
+                String clashStart = clash.Start_Time__c.format('dd-MM-yyyy hh:mm a', tzId);
+                String clashEnd   = clash.End_Time__c.format('hh:mm a', tzId);
                 throw new AuraHandledException(
-                    'This room is already booked for the selected time. Please choose a different slot.');
+                    'Conflict with ' + clash.Name + ' (' + clash.Employee_Name__c + ') — ' +
+                    clashStart + ' to ' + clashEnd + '. Please choose a different slot.'
+                );
             }
 
             Booking__c rec = new Booking__c(
@@ -113,6 +139,22 @@ public with sharing class BookingController {
     }
 
     // ── Wrapper classes ───────────────────────────────────────────────────────
+
+    @AuraEnabled
+    public static void cancelBooking(String bookingId) {
+        try {
+            Booking__c b = [SELECT Id, Name, Status__c, Start_Time__c FROM Booking__c WHERE Id = :bookingId LIMIT 1];
+            if (b.Status__c == 'Canceled') {
+                throw new AuraHandledException('This booking is already canceled.');
+            }
+            // Delete the record so the slot is immediately free — no conflict query issues
+            delete b;
+        } catch (AuraHandledException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new AuraHandledException('Failed to cancel booking: ' + e.getMessage());
+        }
+    }
 
     public class BookingWrapper {
         @AuraEnabled public String Id;
@@ -138,11 +180,11 @@ public with sharing class BookingController {
             this.Status       = b.Status__c;
             this.StartTimeMs  = b.Start_Time__c.getTime();
             this.EndTimeMs    = b.End_Time__c.getTime();
-            TimeZone tz       = UserInfo.getTimeZone();
-            this.StartLocal   = b.Start_Time__c.format('yyyy-MM-dd HH:mm', tz.getID());
-            this.EndLocal     = b.End_Time__c.format(  'yyyy-MM-dd HH:mm', tz.getID());
-            this.DisplayStart = b.Start_Time__c.format('dd-MM-yyyy hh:mm a', tz.getID());
-            this.DisplayEnd   = b.End_Time__c.format(  'dd-MM-yyyy hh:mm a', tz.getID());
+            String tzId       = UserInfo.getTimeZone().getID(); // org TZ is now IST
+            this.StartLocal   = b.Start_Time__c.format('yyyy-MM-dd HH:mm', tzId);
+            this.EndLocal     = b.End_Time__c.format(  'yyyy-MM-dd HH:mm', tzId);
+            this.DisplayStart = b.Start_Time__c.format('dd-MM-yyyy hh:mm a', tzId);
+            this.DisplayEnd   = b.End_Time__c.format(  'dd-MM-yyyy hh:mm a', tzId);
         }
     }
 

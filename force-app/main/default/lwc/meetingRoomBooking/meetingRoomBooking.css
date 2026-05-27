@@ -212,3 +212,249 @@ lightning-spinner {
   .time-label    { min-width: 72px; font-size: 0.78rem; }
   .calendar-cell { min-height: 52px; }
 }
+
+/* ── Audit log table ─────────────────────────────────────────────────────── */
+.audit-table-wrap {
+  overflow-x: auto;
+  border-radius: var(--border-radius-md);
+  border: 1px solid var(--color-border-tertiary);
+}
+.audit-table {
+  width: 100%;
+  font-size: 0.8rem;
+}
+.audit-table thead th {
+  background: #032d60;
+  color: #fff;
+  padding: 0.5rem 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+.audit-table tbody td {
+  padding: 0.4rem 0.75rem;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--color-border-tertiary);
+}
+.audit-ts {
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono, monospace);
+}
+.audit-fields {
+  font-size: 0.75rem;
+  color: var(--color-text-secondary);
+}
+.audit-detail {
+  font-size: 0.75rem;
+  color: var(--color-text-tertiary);
+  max-width: 220px;
+}
+.audit-page-label {
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+
+/* ── Action badges ───────────────────────────────────────────────────────── */
+.audit-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+.audit-badge_created   { background: #E1F5EE; color: #0F6E56; }
+.audit-badge_updated   { background: #E6F1FB; color: #185FA5; }
+.audit-badge_cancelled { background: #FAEEDA; color: #854F0B; }
+.audit-badge_deleted   { background: #FCEBEB; color: #A32D2D; }
+.audit-badge_restored  { background: #EEEDFE; color: #3C3489; }
+
+/* ── All Bookings table ───────────────────────────────────────────────────── */
+.bookings-table-wrap {
+  overflow-x: auto;
+  border-radius: 0.25rem;
+  border: 1px solid #e3e6ea;
+}
+.bookings-table-wrap table thead th {
+  background: #032d60;
+  color: #fff;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.bookings-table-wrap table tbody td {
+  padding: 0.45rem 0.75rem;
+  font-size: 0.85rem;
+  vertical-align: middle;
+  border-bottom: 1px solid #f0f2f5;
+}
+.booking-name  { font-weight: 600; color: #032d60; }
+.booking-time  { white-space: nowrap; font-size: 0.8rem; color: #444; }
+
+/* Status badges */
+.status-booked    { display:inline-block; padding:2px 10px; border-radius:20px; font-size:0.75rem; font-weight:600; background:#E1F5EE; color:#0F6E56; }
+.status-cancelled { display:inline-block; padding:2px 10px; border-radius:20px; font-size:0.75rem; font-weight:600; background:#FCEBEB; color:#A32D2D; }
+
+/* Cancel button */
+.cancel-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 12px;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: #A32D2D;
+  background: #fff;
+  border: 1px solid #A32D2D;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: background 120ms, color 120ms;
+  white-space: nowrap;
+}
+.cancel-btn:hover:not(:disabled) {
+  background: #FCEBEB;
+}
+.cancel-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.cancelled-label { color: #aaa; font-size: 0.8rem; }
+
+/* ── Cancel confirmation modal ───────────────────────────────────────────── */
+.cancel-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  z-index: 8000;
+}
+.cancel-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 9000;
+  background: #fff;
+  border-radius: 0.5rem;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  width: 420px;
+  max-width: 95vw;
+  overflow: hidden;
+}
+.cancel-modal-header {
+  display: flex;
+  align-items: center;
+  padding: 1rem 1.25rem 0.75rem;
+  border-bottom: 1px solid #e3e6ea;
+  background: #fef9f0;
+}
+.cancel-modal-title {
+  flex: 1;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #181818;
+}
+.cancel-modal-close {
+  background: none;
+  border: none;
+  font-size: 1rem;
+  color: #706e6b;
+  cursor: pointer;
+  padding: 0 0.25rem;
+  line-height: 1;
+}
+.cancel-modal-close:hover { color: #181818; }
+.cancel-modal-body {
+  padding: 1.25rem;
+}
+.cancel-modal-body p {
+  font-size: 0.9rem;
+  color: #181818;
+  margin-bottom: 0.5rem;
+}
+.cancel-modal-sub {
+  font-size: 0.8rem !important;
+  color: #706e6b !important;
+}
+.cancel-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding: 0.75rem 1.25rem;
+  border-top: 1px solid #e3e6ea;
+  background: #f8f9fb;
+}
+.status-canceled {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: #FCEBEB;
+  color: #A32D2D;
+}
+
+/* ── All Bookings search bar ─────────────────────────────────────────────── */
+.search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.search-icon {
+  position: absolute;
+  left: 0.6rem;
+  font-size: 0.85rem;
+  color: #706e6b;
+  pointer-events: none;
+}
+.search-input {
+  width: 100%;
+  height: 1.875rem;
+  padding: 0 2rem 0 2rem;
+  font-size: 0.875rem;
+  font-family: inherit;
+  color: #181818;
+  background: #fff;
+  border: 1px solid #dddbda;
+  border-radius: 1rem;
+  box-sizing: border-box;
+  transition: border-color 0.1s, box-shadow 0.1s;
+}
+.search-input:focus {
+  outline: none;
+  border-color: #1589ee;
+  box-shadow: 0 0 0 3px rgba(21,137,238,0.15);
+}
+.search-clear {
+  position: absolute;
+  right: 0.5rem;
+  background: none;
+  border: none;
+  font-size: 0.8rem;
+  color: #706e6b;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0.1rem 0.25rem;
+  border-radius: 50%;
+}
+.search-clear:hover { background: #f3f3f3; color: #181818; }
+
+/* ── Sortable column headers ─────────────────────────────────────────────── */
+.sortable-th {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.sortable-th:hover {
+  background: #023d7a !important;
+}
+.sort-icon {
+  font-size: 0.7rem;
+  color: rgba(255,255,255,0.45);
+  margin-left: 0.2rem;
+}
+.sort-icon_active {
+  color: #fff;
+  font-size: 0.75rem;
+}

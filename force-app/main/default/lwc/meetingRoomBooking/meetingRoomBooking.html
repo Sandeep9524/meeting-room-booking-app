@@ -175,34 +175,252 @@
                 <!-- ── All Bookings ── -->
                 <lightning-tab label="All Bookings" value="list">
                     <div class="slds-box slds-theme_default">
-                        <div class="slds-grid slds-gutters slds-m-bottom_medium">
-                            <div class="slds-col">
+
+                        <!-- Header + Search + Refresh -->
+                        <div class="slds-grid slds-gutters slds-align_absolute-center slds-m-bottom_medium">
+                            <div class="slds-col slds-size_1-of-4">
                                 <h3 class="slds-text-heading_small">Current &amp; Upcoming Bookings</h3>
+                                <p class="slds-text-body_small slds-text-color_weak">{filteredBookingCount} record(s)</p>
                             </div>
-                            <div class="slds-col">
+                            <div class="slds-col slds-size_2-of-4">
+                                <div class="search-wrap">
+                                    <span class="search-icon">&#128269;</span>
+                                    <input
+                                        type="text"
+                                        class="search-input"
+                                        placeholder="Search by Booking #, Room, or Employee..."
+                                        value={bookingSearch}
+                                        onkeyup={handleBookingSearch} />
+                                    <template if:true={bookingSearch}>
+                                        <button class="search-clear" onclick={clearBookingSearch}>✕</button>
+                                    </template>
+                                </div>
+                            </div>
+                            <div class="slds-col slds-size_1-of-4 slds-text-align_right">
                                 <lightning-button label="Refresh" onclick={refreshBookings}
-                                    icon-name="utility:refresh" variant="neutral"
-                                    class="slds-float_right">
+                                    icon-name="utility:refresh" variant="neutral">
                                 </lightning-button>
                             </div>
                         </div>
-                        <template if:true={hasBookings}>
-                            <lightning-datatable key-field="Id" data={bookings}
-                                columns={columns} hide-checkbox-column>
-                            </lightning-datatable>
+
+                        <template if:true={hasFilteredBookings}>
+                            <div class="bookings-table-wrap">
+                                <table class="slds-table slds-table_cell-buffer slds-table_bordered slds-table_striped">
+                                    <thead>
+                                        <tr class="slds-line-height_reset">
+                                            <th class="sortable-th" data-col="Name" onclick={handleSort}>
+                                                <span>Booking #</span>
+                                                <span class={sortIconClass.Name}>{sortIcon.Name}</span>
+                                            </th>
+                                            <th class="sortable-th" data-col="RoomName" onclick={handleSort}>
+                                                <span>Room</span>
+                                                <span class={sortIconClass.RoomName}>{sortIcon.RoomName}</span>
+                                            </th>
+                                            <th class="sortable-th" data-col="EmployeeName" onclick={handleSort}>
+                                                <span>Employee</span>
+                                                <span class={sortIconClass.EmployeeName}>{sortIcon.EmployeeName}</span>
+                                            </th>
+                                            <th class="sortable-th" data-col="DisplayStart" onclick={handleSort}>
+                                                <span>Start Time</span>
+                                                <span class={sortIconClass.DisplayStart}>{sortIcon.DisplayStart}</span>
+                                            </th>
+                                            <th class="sortable-th" data-col="DisplayEnd" onclick={handleSort}>
+                                                <span>End Time</span>
+                                                <span class={sortIconClass.DisplayEnd}>{sortIcon.DisplayEnd}</span>
+                                            </th>
+                                            <th class="sortable-th" data-col="Status" onclick={handleSort}>
+                                                <span>Status</span>
+                                                <span class={sortIconClass.Status}>{sortIcon.Status}</span>
+                                            </th>
+                                            <th>Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <template for:each={filteredBookings} for:item="b">
+                                            <tr key={b.Id}>
+                                                <td class="booking-name">{b.Name}</td>
+                                                <td>{b.RoomName}</td>
+                                                <td>{b.EmployeeName}</td>
+                                                <td class="booking-time">{b.DisplayStart}</td>
+                                                <td class="booking-time">{b.DisplayEnd}</td>
+                                                <td>
+                                                    <span class={b.statusClass}>{b.Status}</span>
+                                                </td>
+                                                <td>
+                                                    <button
+                                                        class="cancel-btn"
+                                                        data-id={b.Id}
+                                                        data-name={b.Name}
+                                                        onclick={handleCancelBooking}
+                                                        disabled={isLoading}
+                                                        title="Cancel this booking">
+                                                        Cancel
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        </template>
+                                    </tbody>
+                                </table>
+                            </div>
                         </template>
-                        <template if:false={hasBookings}>
+
+                        <template if:false={hasFilteredBookings}>
                             <div class="slds-text-align_center slds-p-vertical_large">
-                                <p class="slds-text-color_weak">No bookings found</p>
+                                <template if:true={bookingSearch}>
+                                    <p class="slds-text-color_weak">No bookings match &ldquo;{bookingSearch}&rdquo;</p>
+                                </template>
+                                <template if:false={bookingSearch}>
+                                    <p class="slds-text-color_weak">No upcoming bookings found</p>
+                                </template>
                             </div>
                         </template>
                     </div>
                 </lightning-tab>
 
+
+                <!-- ── Audit Log ── -->
+                <lightning-tab label="Audit Log" value="audit">
+                    <div class="slds-box slds-theme_default">
+                        <!-- Filters -->
+                        <div class="slds-grid slds-gutters slds-wrap slds-m-bottom_medium">
+                            <div class="slds-col slds-size_1-of-1 slds-m-bottom_x-small">
+                                <h3 class="slds-text-heading_small">Booking Audit Log</h3>
+                            </div>
+                            <div class="slds-col slds-size_1-of-4">
+                                <lightning-combobox
+                                    label="Action"
+                                    value={auditFilter.action}
+                                    options={auditActionOptions}
+                                    onchange={handleAuditFilterChange}
+                                    data-field="action">
+                                </lightning-combobox>
+                            </div>
+                            <div class="slds-col slds-size_1-of-4">
+                                <lightning-input
+                                    label="Changed By"
+                                    value={auditFilter.user}
+                                    onchange={handleAuditFilterChange}
+                                    data-field="user"
+                                    placeholder="Search name...">
+                                </lightning-input>
+                            </div>
+                            <div class="slds-col slds-size_1-of-4">
+                                <div class="slds-form-element">
+                                    <label class="slds-form-element__label">Date</label>
+                                    <div class="slds-form-element__control">
+                                        <input type="date" class="slds-input"
+                                            value={auditFilter.date}
+                                            data-field="date"
+                                            onchange={handleAuditDateChange} />
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="slds-col slds-size_1-of-4 slds-align-bottom">
+                                <lightning-button label="Search" variant="brand"
+                                    onclick={loadAuditLogs} class="slds-m-right_x-small">
+                                </lightning-button>
+                                <lightning-button label="Clear" variant="neutral"
+                                    onclick={clearAuditFilters}>
+                                </lightning-button>
+                            </div>
+                        </div>
+
+                        <!-- Results count -->
+                        <template if:true={auditTotalCount}>
+                            <p class="slds-text-body_small slds-text-color_weak slds-m-bottom_small">
+                                {auditTotalCount} record(s) found — showing {auditLogs.length}
+                            </p>
+                        </template>
+
+                        <!-- Table -->
+                        <template if:true={hasAuditLogs}>
+                            <div class="audit-table-wrap">
+                                <table class="slds-table slds-table_cell-buffer slds-table_bordered slds-table_striped audit-table">
+                                    <thead>
+                                        <tr class="slds-line-height_reset">
+                                            <th>Timestamp</th>
+                                            <th>Action</th>
+                                            <th>Booking #</th>
+                                            <th>Room</th>
+                                            <th>Employee</th>
+                                            <th>Changed By</th>
+                                            <th>Fields Changed</th>
+                                            <th>Detail</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <template for:each={auditLogs} for:item="log">
+                                            <tr key={log.Id}>
+                                                <td class="audit-ts">{log.TimestampDisplay}</td>
+                                                <td>
+                                                    <span class={log.actionBadgeClass}>{log.Action}</span>
+                                                </td>
+                                                <td>{log.BookingName}</td>
+                                                <td>{log.RoomName}</td>
+                                                <td>{log.EmployeeName}</td>
+                                                <td>{log.ChangedBy}</td>
+                                                <td class="audit-fields">{log.ChangedFields}</td>
+                                                <td class="audit-detail">{log.detailText}</td>
+                                            </tr>
+                                        </template>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <!-- Pagination -->
+                            <div class="slds-grid slds-grid_align-center slds-m-top_medium">
+                                <lightning-button label="Previous" variant="neutral"
+                                    onclick={auditPrevPage} disabled={isFirstAuditPage}
+                                    class="slds-m-right_small">
+                                </lightning-button>
+                                <span class="slds-align-middle slds-m-horizontal_small audit-page-label">
+                                    Page {auditPage} of {auditTotalPages}
+                                </span>
+                                <lightning-button label="Next" variant="neutral"
+                                    onclick={auditNextPage} disabled={isLastAuditPage}
+                                    class="slds-m-left_small">
+                                </lightning-button>
+                            </div>
+                        </template>
+
+                        <template if:false={hasAuditLogs}>
+                            <div class="slds-text-align_center slds-p-vertical_large">
+                                <p class="slds-text-color_weak">No audit records found</p>
+                            </div>
+                        </template>
+                    </div>
+                </lightning-tab>
             </lightning-tabset>
         </div>
         <template if:true={isLoading}>
             <lightning-spinner alternative-text="Loading" size="medium"></lightning-spinner>
+        </template>
+
+        <!-- ── Cancel Confirmation Modal ── -->
+        <template if:true={showCancelModal}>
+            <div class="cancel-modal-backdrop" onclick={handleCancelModalClose}></div>
+            <div class="cancel-modal" role="dialog" aria-modal="true">
+                <div class="cancel-modal-header">
+                    <lightning-icon icon-name="utility:warning" variant="warning"
+                        size="small" class="slds-m-right_small">
+                    </lightning-icon>
+                    <span class="cancel-modal-title">Cancel Booking</span>
+                    <button class="cancel-modal-close" onclick={handleCancelModalClose}
+                        title="Close">✕</button>
+                </div>
+                <div class="cancel-modal-body">
+                    <p>Are you sure you want to cancel <strong>{cancelTargetName}</strong>?</p>
+                    <p class="cancel-modal-sub">This action cannot be undone. The time slot will become available for others.</p>
+                </div>
+                <div class="cancel-modal-footer">
+                    <lightning-button label="Keep Booking" variant="neutral"
+                        onclick={handleCancelModalClose} class="slds-m-right_small">
+                    </lightning-button>
+                    <lightning-button label="Yes, Cancel Booking" variant="destructive"
+                        onclick={handleCancelConfirm}>
+                    </lightning-button>
+                </div>
+            </div>
         </template>
     </lightning-card>
 </template>

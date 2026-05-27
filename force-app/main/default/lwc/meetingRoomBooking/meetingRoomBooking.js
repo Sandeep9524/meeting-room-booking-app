@@ -2,7 +2,10 @@ import { LightningElement, track, wire } from 'lwc';
 import getBookings from '@salesforce/apex/BookingController.getBookings';
 import getRooms from '@salesforce/apex/BookingController.getRooms';
 import checkAvailabilityApex from '@salesforce/apex/BookingController.checkAvailability';
-import createBookingApex from '@salesforce/apex/BookingController.createBooking';
+import createBookingApex  from '@salesforce/apex/BookingController.createBooking';
+import cancelBookingApex from '@salesforce/apex/BookingController.cancelBooking';
+import getAllAuditLogs   from '@salesforce/apex/BookingAuditHandler.getAllAuditLogs';
+import getAuditLogCount  from '@salesforce/apex/BookingAuditHandler.getAuditLogCount';
 import { ShowToastEvent } from 'lightning/platformShowToastEvent';
 
 export default class MeetingRoomBooking extends LightningElement {
@@ -28,16 +31,21 @@ export default class MeetingRoomBooking extends LightningElement {
   @track isCreating = false;
   @track showFlow   = false;
 
+  // ── Audit log state ───────────────────────────────────────────────────────
+  @track auditLogs       = [];
+  @track auditTotalCount = 0;
+  @track auditPage       = 1;
+  auditPageSize          = 20;
+  @track auditFilter     = { action: 'All', user: '', date: '' };
+
+
   wiredRoomsResult;
 
-  columns = [
-    { label: 'Booking #',  fieldName: 'Name',         type: 'text' },
-    { label: 'Room',       fieldName: 'RoomName',      type: 'text' },
-    { label: 'Employee',   fieldName: 'EmployeeName',  type: 'text' },
-    { label: 'Start Time', fieldName: 'DisplayStart',  type: 'text' },
-    { label: 'End Time',   fieldName: 'DisplayEnd',    type: 'text' },
-    { label: 'Status',     fieldName: 'Status',        type: 'text' }
-  ];
+  // columns kept for reference — table is now custom HTML for cancel button support
+  @track cancellingId   = null;
+  @track bookingSearch  = '';
+  @track sortCol        = 'DisplayStart'; // default sort by start time
+  @track sortDir        = 'asc';
 
   get hasBookings() { return this.bookings && this.bookings.length > 0; }
 
@@ -72,7 +80,8 @@ export default class MeetingRoomBooking extends LightningElement {
       .then(data => {
         this.bookings = (data || []).map(b => ({
           ...b,
-          statusClass: b.Status === 'Booked' ? 'slds-text-color_success' : ''
+          statusClass: 'status-booked',
+          canCancel:   true   // all returned records are Booked (canceled = deleted)
         }));
         this.generateCalendarView();
       })
@@ -122,7 +131,7 @@ export default class MeetingRoomBooking extends LightningElement {
 
     // Paint bookings onto cells
     // Use StartLocal/EndLocal ("YYYY-MM-DD HH:mm" in org TZ from Apex) — no JS timezone math
-    (this.bookings || []).forEach(b => {
+    (this.bookings || []).filter(b => b.Status === 'Booked').forEach(b => { // skip canceled
       if (!b.StartLocal || !b.EndLocal) return;
 
       // StartLocal format: "YYYY-MM-DD HH:mm"
@@ -180,6 +189,17 @@ export default class MeetingRoomBooking extends LightningElement {
     this.conflictMessage = '';
     this.successMessage  = '';
     if (this.activeTab === 'calendar') this.loadBookings();
+    if (this.activeTab === 'audit') {
+      this.auditPage = 1;
+      // Default date filter to today if not already set
+      if (!this.auditFilter.date) {
+        const d = new Date();
+        const p = n => String(n).padStart(2,'0');
+        this.auditFilter = { ...this.auditFilter,
+          date: d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate()) };
+      }
+      this.loadAuditLogs();
+    }
   }
 
   handleDateChange(e) {
@@ -382,6 +402,202 @@ export default class MeetingRoomBooking extends LightningElement {
   _parseDateParts(str) {
     const normalised = this._normaliseDate(str);
     return normalised.split('-').map(Number); // [YYYY, MM, DD]
+  }
+
+  // ── Audit log ─────────────────────────────────────────────────────────────
+
+  get auditActionOptions() {
+    return [
+      { label: 'All Actions', value: 'All' },
+      { label: 'Created',     value: 'Created' },
+      { label: 'Updated',     value: 'Updated' },
+      { label: 'Cancelled',   value: 'Cancelled' },
+      { label: 'Deleted',     value: 'Deleted' },
+      { label: 'Restored',    value: 'Restored' }
+    ];
+  }
+
+  get hasAuditLogs()    { return this.auditLogs && this.auditLogs.length > 0; }
+  get auditTotalPages() { return Math.max(1, Math.ceil(this.auditTotalCount / this.auditPageSize)); }
+  get isFirstAuditPage(){ return this.auditPage <= 1; }
+  get isLastAuditPage() { return this.auditPage >= this.auditTotalPages; }
+
+  handleAuditFilterChange(e) {
+    const field = e.target.dataset.field;
+    this.auditFilter = { ...this.auditFilter, [field]: e.target.value || '' };
+  }
+
+  handleAuditDateChange(e) {
+    // Normalise to YYYY-MM-DD — Apex SOQL date literals require this format
+    const raw = e.target.value || '';
+    this.auditFilter = { ...this.auditFilter, date: this._normaliseDate(raw) };
+  }
+
+  clearAuditFilters() {
+    this.auditFilter = { action: 'All', user: '', date: '' };
+    this.auditPage   = 1;
+    this.loadAuditLogs();
+  }
+
+  auditPrevPage() { if (this.auditPage > 1) { this.auditPage--; this.loadAuditLogs(); } }
+  auditNextPage() { if (this.auditPage < this.auditTotalPages) { this.auditPage++; this.loadAuditLogs(); } }
+
+  loadAuditLogs() {
+    this.isLoading = true;
+    const offset = (this.auditPage - 1) * this.auditPageSize;
+    Promise.all([
+      getAllAuditLogs({
+        pageSize:     this.auditPageSize,
+        pageOffset:   offset,
+        filterAction: this.auditFilter.action,
+        filterUser:   this.auditFilter.user,
+        filterDate:   this._normaliseDate(this.auditFilter.date) // always YYYY-MM-DD for SOQL
+      }),
+      getAuditLogCount({
+        filterAction: this.auditFilter.action,
+        filterUser:   this.auditFilter.user,
+        filterDate:   this._normaliseDate(this.auditFilter.date)
+      })
+    ])
+    .then(([logs, count]) => {
+      this.auditTotalCount = count;
+      this.auditLogs = (logs || []).map(l => ({
+        ...l,
+        actionBadgeClass: this._auditBadgeClass(l.Action),
+        detailText:       this._auditDetail(l)
+      }));
+    })
+    .catch(() => this.showToast('Error', 'Failed to load audit logs', 'error'))
+    .finally(() => { this.isLoading = false; });
+  }
+
+  _auditBadgeClass(action) {
+    const map = {
+      'Created':   'audit-badge audit-badge_created',
+      'Updated':   'audit-badge audit-badge_updated',
+      'Cancelled': 'audit-badge audit-badge_cancelled',
+      'Deleted':   'audit-badge audit-badge_deleted',
+      'Restored':  'audit-badge audit-badge_restored'
+    };
+    return map[action] || 'audit-badge';
+  }
+
+  _auditDetail(l) {
+    if (l.Action === 'Created') {
+      return l.NewStartTime && l.NewEndTime
+        ? l.NewStartTime + ' → ' + l.NewEndTime
+        : '';
+    }
+    if (l.Action === 'Updated') {
+      const parts = [];
+      if (l.OldStartTime !== l.NewStartTime && l.NewStartTime)
+        parts.push('Time: ' + (l.OldStartTime || '?') + ' → ' + l.NewStartTime);
+      if (l.OldStatus !== l.NewStatus && l.NewStatus)
+        parts.push('Status: ' + (l.OldStatus || '?') + ' → ' + l.NewStatus);
+      return parts.join(' | ');
+    }
+    if (l.Action === 'Deleted' || l.Action === 'Cancelled') {
+      return l.OldStartTime ? l.OldStartTime + ' → ' + (l.OldEndTime || '') : '';
+    }
+    return '';
+  }
+
+  // ── Cancel confirmation modal ─────────────────────────────────────────────
+  @track showCancelModal  = false;
+  @track cancelTargetId   = null;
+  @track cancelTargetName = null;
+
+  handleCancelBooking(event) {
+    this.cancelTargetId   = event.currentTarget.dataset.id;
+    this.cancelTargetName = event.currentTarget.dataset.name;
+    this.showCancelModal  = true;
+  }
+
+  handleCancelModalClose() {
+    this.showCancelModal  = false;
+    this.cancelTargetId   = null;
+    this.cancelTargetName = null;
+  }
+
+  async handleCancelConfirm() {
+    this.showCancelModal = false;
+    this.cancellingId    = this.cancelTargetId;
+    this.isLoading       = true;
+    try {
+      await cancelBookingApex({ bookingId: this.cancelTargetId });
+      this.showToast('Success', this.cancelTargetName + ' has been canceled and slot is now free', 'success');
+      this.loadBookings();
+    } catch (e) {
+      this.showToast('Error', e.body?.message || 'Failed to cancel booking', 'error');
+    } finally {
+      this.cancellingId = null;
+      this.isLoading    = false;
+      this.cancelTargetId   = null;
+      this.cancelTargetName = null;
+    }
+  }
+
+  // ── All Bookings search + sort ───────────────────────────────────────────
+
+  handleBookingSearch(e) {
+    this.bookingSearch = e.target.value || '';
+  }
+
+  clearBookingSearch() {
+    this.bookingSearch = '';
+  }
+
+  handleSort(e) {
+    const col = e.currentTarget.dataset.col;
+    if (this.sortCol === col) {
+      this.sortDir = this.sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      this.sortCol = col;
+      this.sortDir = 'asc';
+    }
+  }
+
+  get filteredBookings() {
+    const term = (this.bookingSearch || '').toLowerCase().trim();
+    let list = (this.bookings || []).filter(b => {
+      if (!term) return true;
+      return (b.Name         || '').toLowerCase().includes(term) ||
+             (b.RoomName     || '').toLowerCase().includes(term) ||
+             (b.EmployeeName || '').toLowerCase().includes(term);
+    });
+
+    // Sort
+    const col = this.sortCol;
+    const dir = this.sortDir === 'asc' ? 1 : -1;
+    list = [...list].sort((a, b) => {
+      const av = (a[col] || '').toLowerCase();
+      const bv = (b[col] || '').toLowerCase();
+      return av < bv ? -dir : av > bv ? dir : 0;
+    });
+
+    return list;
+  }
+
+  get filteredBookingCount() { return (this.filteredBookings || []).length; }
+  get hasFilteredBookings()  { return this.filteredBookingCount > 0; }
+
+  // Sort icons per column
+  get sortIcon() {
+    const cols = ['Name','RoomName','EmployeeName','DisplayStart','DisplayEnd','Status'];
+    const icons = {};
+    cols.forEach(c => {
+      icons[c] = this.sortCol === c ? (this.sortDir === 'asc' ? ' ▲' : ' ▼') : ' ⇅';
+    });
+    return icons;
+  }
+
+  get sortIconClass() {
+    const cols = ['Name','RoomName','EmployeeName','DisplayStart','DisplayEnd','Status'];
+    const cls = {};
+    cols.forEach(c => {
+      cls[c] = this.sortCol === c ? 'sort-icon sort-icon_active' : 'sort-icon';
+    });
+    return cls;
   }
 
   showToast(title, message, variant) {
