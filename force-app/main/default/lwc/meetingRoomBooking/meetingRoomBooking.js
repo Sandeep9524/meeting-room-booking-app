@@ -4,6 +4,11 @@ import getRooms from '@salesforce/apex/BookingController.getRooms';
 import checkAvailabilityApex from '@salesforce/apex/BookingController.checkAvailability';
 import createBookingApex  from '@salesforce/apex/BookingController.createBooking';
 import cancelBookingApex from '@salesforce/apex/BookingController.cancelBooking';
+import getMeetingLink          from '@salesforce/apex/BookingController.getMeetingLink';
+import getAllRoomPermissions   from '@salesforce/apex/RoomPermissionService.getAllRoomPermissions';
+import getPendingApprovals    from '@salesforce/apex/BookingApprovalService.getPendingApprovals';
+import isCurrentUserApprover  from '@salesforce/apex/BookingApprovalService.isCurrentUserApprover';
+import processApproval        from '@salesforce/apex/BookingApprovalService.processApproval';
 import getAllAuditLogs   from '@salesforce/apex/BookingAuditHandler.getAllAuditLogs';
 import getAuditLogCount  from '@salesforce/apex/BookingAuditHandler.getAuditLogCount';
 import { ShowToastEvent } from 'lightning/platformShowToastEvent';
@@ -29,7 +34,16 @@ export default class MeetingRoomBooking extends LightningElement {
   @track preselectedSlot = null;
   @track isLoading  = false;
   @track isCreating = false;
-  @track showFlow   = false;
+  @track showFlow         = false;
+  @track roomPermissions    = {};
+  @track pendingApprovals   = [];
+  @track showApprovalsTab   = true; // default true, set to false for non-approvers
+  @track showRejectModal    = false;
+  @track rejectTargetId     = null;
+  @track rejectComments     = '';
+  @track processingIds      = new Set(); // track which bookings are being processed
+
+
 
   // ── Audit log state ───────────────────────────────────────────────────────
   @track auditLogs       = [];
@@ -42,7 +56,8 @@ export default class MeetingRoomBooking extends LightningElement {
   wiredRoomsResult;
 
   // columns kept for reference — table is now custom HTML for cancel button support
-  @track cancellingId   = null;
+  @track cancellingId        = null;
+  @track newBookingMeetingLink = null;
   @track bookingSearch  = '';
   @track sortCol        = 'DisplayStart'; // default sort by start time
   @track sortDir        = 'asc';
@@ -66,7 +81,8 @@ export default class MeetingRoomBooking extends LightningElement {
       result.data.forEach(r => this.roomsMap.set(r.value, r.label));
       this.computeGridStyle();
       this.generateTimeSlots();
-      this.loadBookings();          // load bookings once rooms are ready
+      this.loadBookings();
+      this.loadRoomPermissions();   // load permissions for calendar UI
     } else if (result.error) {
       this.showToast('Error', 'Failed to load rooms', 'error');
       this.isLoading = false;
@@ -80,8 +96,9 @@ export default class MeetingRoomBooking extends LightningElement {
       .then(data => {
         this.bookings = (data || []).map(b => ({
           ...b,
-          statusClass: 'status-booked',
-          canCancel:   true   // all returned records are Booked (canceled = deleted)
+          statusClass: b.Status === 'Pending Approval' ? 'status-pending' :
+                       b.Status === 'Approved'         ? 'status-approved' : 'status-booked',
+          canCancel: true
         }));
         this.generateCalendarView();
       })
@@ -131,7 +148,7 @@ export default class MeetingRoomBooking extends LightningElement {
 
     // Paint bookings onto cells
     // Use StartLocal/EndLocal ("YYYY-MM-DD HH:mm" in org TZ from Apex) — no JS timezone math
-    (this.bookings || []).filter(b => b.Status === 'Booked').forEach(b => { // skip canceled
+    (this.bookings || []).filter(b => !['Canceled', 'Cancelled', 'Rejected'].includes(b.Status)).forEach(b => {
       if (!b.StartLocal || !b.EndLocal) return;
 
       // StartLocal format: "YYYY-MM-DD HH:mm"
@@ -154,12 +171,17 @@ export default class MeetingRoomBooking extends LightningElement {
           const slotEndMins   = slotStartMins + 30;
 
           if (bookingStartMins < slotEndMins && bookingEndMins > slotStartMins && slot.cells[b.RoomId]) {
+            const isPending  = b.Status === 'Pending Approval';
+            const isApproved = b.Status === 'Approved';
             slot.cells[b.RoomId] = {
-              cssClass: 'calendar-cell booked',
+              cssClass: isPending  ? 'calendar-cell pending-approval' :
+                        isApproved ? 'calendar-cell approved' : 'calendar-cell booked',
               isBooked: true,
-              bookingTitle: b.EmployeeName || 'Booked',
+              bookingTitle: (isPending ? '⏳ ' : isApproved ? '✅ ' : '') + (b.EmployeeName || 'Booked'),
               timeRange: `${b.DisplayStart.split(' ').slice(1).join(' ')} - ${b.DisplayEnd.split(' ').slice(1).join(' ')}`,
-              tooltip: `${b.RoomName} - ${b.EmployeeName || 'Booked'}`
+              tooltip: isPending
+                ? `Pending Approval: ${b.EmployeeName} — awaiting manager`
+                : `${b.RoomName} - ${b.EmployeeName || 'Booked'}`
             };
           }
         });
@@ -171,7 +193,20 @@ export default class MeetingRoomBooking extends LightningElement {
       ...slot,
       roomCells: (this.filteredRooms || []).map(r => {
         const cell = slot.cells[r.value] || { cssClass: 'calendar-cell available', isBooked: false, tooltip: 'Available', bookingTitle: '', timeRange: '' };
-        return { ...cell, roomId: r.value, roomLabel: r.label, computedClass: `room-cell ${cell.cssClass}` };
+        const perm = this.getRoomPermission(r.value);
+        const restricted = !perm.canBook;
+        const needsApproval = perm.requiresApproval && perm.canBook && !cell.isBooked;
+        let cssClass = cell.cssClass;
+        if (restricted && !cell.isBooked) cssClass = 'calendar-cell restricted';
+        else if (needsApproval) cssClass = 'calendar-cell needs-approval';
+        // Only show permission tooltip on empty cells — booked cells use their own tooltip
+        const tooltip = cell.isBooked ? cell.tooltip :
+                        restricted    ? perm.message :
+                        needsApproval ? 'Click to book — requires manager approval' :
+                        'Available';
+        return { ...cell, roomId: r.value, roomLabel: r.label,
+                 computedClass: 'room-cell ' + cssClass,
+                 restricted, needsApproval, tooltip };
       })
     }));
 
@@ -231,6 +266,13 @@ export default class MeetingRoomBooking extends LightningElement {
       return;
     }
 
+    // Check room permission
+    const perm = this.getRoomPermission(roomId);
+    if (!perm.canBook) {
+      this.showToast('Access Denied', perm.message || 'You do not have permission to book this room', 'error');
+      return;
+    }
+
     // Block clicks on past slots — compare using numeric parts (immune to date format)
     const [selY, selM, selD] = this._parseDateParts(this.selectedDate);
     const [slotH, slotMin]   = time.split(':').map(Number);
@@ -260,7 +302,7 @@ export default class MeetingRoomBooking extends LightningElement {
 
   clearPreselection() {
     this.preselectedSlot = null;
-    this.formData = { roomId: '', employeeName: '', startDate: '', startTime24: '', endDate: '', endTime24: '' };
+    this.formData = { roomId: '', employeeName: '', employeeEmail: '', startDate: '', startTime24: '', endDate: '', endTime24: '' };
   }
 
   handleFormChange(e) {
@@ -351,19 +393,22 @@ export default class MeetingRoomBooking extends LightningElement {
     if (!this.validateForm()) return;
     this.isCreating = true; this.conflictMessage = ''; this.successMessage = '';
     try {
-      await createBookingApex({
-        roomId:       this.formData.roomId,
-        employeeName: this.formData.employeeName,
-        startTime:    this._toApexLocalStr(this.formData.startDate, this.formData.startTime24),
-        endTime:      this._toApexLocalStr(this.formData.endDate,   this.formData.endTime24)
+      const result = await createBookingApex({
+        roomId:        this.formData.roomId,
+        employeeName:  this.formData.employeeName,
+        employeeEmail: this.formData.employeeEmail || '',
+        startTime:     this._toApexLocalStr(this.formData.startDate, this.formData.startTime24),
+        endTime:       this._toApexLocalStr(this.formData.endDate,   this.formData.endTime24)
       });
+      // Jitsi link is generated synchronously — available immediately
+      this.newBookingMeetingLink = result && result.MeetingLink ? result.MeetingLink : null;
       this.successMessage = 'Booking created successfully!';
       this.showToast('Success', 'Meeting room booked successfully', 'success');
       setTimeout(() => {
         this.clearPreselection();
         this.activeTab = 'calendar';
         this.loadBookings();
-      }, 1200);
+      }, 2000);
     } catch (e) {
       this.showToast('Error', e.body?.message || 'Failed to create booking', 'error');
     } finally { this.isCreating = false; }
@@ -537,6 +582,120 @@ export default class MeetingRoomBooking extends LightningElement {
     }
   }
 
+  checkIfApprover() {
+    isCurrentUserApprover()
+      .then(result => {
+        this.showApprovalsTab = result === true;
+      })
+      .catch(() => {
+        // On error default to showing — better to show than hide for admins
+        this.showApprovalsTab = true;
+      });
+  }
+
+  // ── Approvals ────────────────────────────────────────────────────────────
+
+  get hasPendingApprovals()  { return this.pendingApprovals && this.pendingApprovals.length > 0; }
+  get pendingApprovalCount() { return (this.pendingApprovals || []).length; }
+
+  loadPendingApprovals() {
+    getPendingApprovals()
+      .then(data => { this.pendingApprovals = data || []; })
+      .catch(() => this.showToast('Error', 'Failed to load approvals', 'error'));
+  }
+
+  // Polls getPendingApprovals until bookingId is no longer in the list,
+  // then syncs the UI. Retries up to 5 times with 1.5s intervals.
+  _pollUntilGone(bookingId, attempt) {
+    const MAX_ATTEMPTS = 5;
+    const INTERVAL_MS  = 1500;
+    if (attempt >= MAX_ATTEMPTS) return; // give up gracefully
+    setTimeout(() => {
+      getPendingApprovals()
+        .then(data => {
+          const still = (data || []).some(a => a.BookingId === bookingId);
+          if (still) {
+            // Still there — keep polling
+            this._pollUntilGone(bookingId, attempt + 1);
+          } else {
+            // Gone from server — update the full list
+            this.pendingApprovals = data || [];
+          }
+        })
+        .catch(() => {}); // silently ignore poll errors
+    }, INTERVAL_MS);
+  }
+
+  handleApprove(event) {
+    const bookingId = event.currentTarget.dataset.id;
+    if (this.processingIds.has(bookingId)) return;
+    this.processingIds = new Set([...this.processingIds, bookingId]);
+    this.isLoading = true;
+    processApproval({ bookingId, action: 'Approve', comments: '' })
+      .then(() => {
+        this.showToast('Approved', 'Booking has been approved', 'success');
+        // Optimistically remove card immediately
+        this.pendingApprovals = this.pendingApprovals.filter(a => a.BookingId !== bookingId);
+        this.loadBookings();
+        // Poll server until the workitem is truly gone (max 5 attempts)
+        this._pollUntilGone(bookingId, 0);
+      })
+      .catch(e => this.showToast('Error', e.body?.message || 'Approval failed', 'error'))
+      .finally(() => {
+        this.processingIds = new Set([...this.processingIds].filter(id => id !== bookingId));
+        this.isLoading = false;
+      });
+  }
+
+  handleReject(event) {
+    this.rejectTargetId  = event.currentTarget.dataset.id;
+    this.rejectComments  = '';
+    this.showRejectModal = true;
+  }
+
+  handleRejectModalClose() {
+    this.showRejectModal = false;
+    this.rejectTargetId  = null;
+    this.rejectComments  = '';
+  }
+
+  handleRejectCommentsChange(e) { this.rejectComments = e.target.value || ''; }
+
+  handleRejectConfirm() {
+    const bookingId = this.rejectTargetId;
+    this.showRejectModal = false;
+    this.isLoading = true;
+    processApproval({ bookingId, action: 'Reject', comments: this.rejectComments })
+      .then(() => {
+        this.showToast('Rejected', 'Booking has been rejected', 'info');
+        // Optimistically remove card immediately
+        this.pendingApprovals = this.pendingApprovals.filter(a => a.BookingId !== bookingId);
+        this.loadBookings();
+        // Poll server until the workitem is truly gone (max 5 attempts)
+        this._pollUntilGone(bookingId, 0);
+      })
+      .catch(e => this.showToast('Error', e.body?.message || 'Rejection failed', 'error'))
+      .finally(() => { this.isLoading = false; this.rejectTargetId = null; });
+  }
+
+  // ── Room permissions ──────────────────────────────────────────────────────
+
+  loadRoomPermissions() {
+    getAllRoomPermissions()
+      .then(data => {
+        const map = {};
+        (data || []).forEach(p => { map[p.roomId] = p; });
+        this.roomPermissions = map;
+        this.generateCalendarView(); // re-render with permission info
+      })
+      .catch(() => {}); // silent — default allow if fails
+  }
+
+  getRoomPermission(roomId) {
+    return this.roomPermissions[roomId] ||
+           { canBook: true, requiresApproval: false, message: '' };
+  }
+
   // ── All Bookings search + sort ───────────────────────────────────────────
 
   handleBookingSearch(e) {
@@ -598,6 +757,24 @@ export default class MeetingRoomBooking extends LightningElement {
       cls[c] = this.sortCol === c ? 'sort-icon sort-icon_active' : 'sort-icon';
     });
     return cls;
+  }
+
+  // Poll for meeting link after booking — Teams API is async
+  _pollForMeetingLink(bookingId, attempt) {
+    if (attempt > 5) return; // give up after 5 attempts (~15s)
+    setTimeout(() => {
+      getMeetingLink({ bookingId })
+        .then(link => {
+          if (link) {
+            this.newBookingMeetingLink = link;
+            this.successMessage = 'Booking confirmed! Google Meet link is ready.';
+            this.loadBookings(); // refresh list to show link
+          } else {
+            this._pollForMeetingLink(bookingId, attempt + 1);
+          }
+        })
+        .catch(() => {}); // silent fail — link just won't show
+    }, 3000);
   }
 
   showToast(title, message, variant) {

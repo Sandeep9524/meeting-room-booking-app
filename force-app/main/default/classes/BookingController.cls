@@ -25,9 +25,11 @@ public with sharing class BookingController {
                 Integer hr  = Integer.valueOf(tp[0]);
                 Integer mn  = Integer.valueOf(tp[1]);
                 Integer sec = tp.size() > 2 ? Integer.valueOf(tp[2]) : 0;
-                // Method 2 from verify script — the only method that gives correct UTC
-                DateTime asGmt   = DateTime.newInstanceGmt(yr, mo, dy, hr, mn, sec);
-                Integer  offsetMs = UserInfo.getTimeZone().getOffset(asGmt);
+                // Always use IST (Asia/Kolkata, UTC+5:30) — booking times are entered in IST
+                // regardless of which user's account is logged in
+                DateTime asGmt    = DateTime.newInstanceGmt(yr, mo, dy, hr, mn, sec);
+                TimeZone istTz    = TimeZone.getTimeZone('Asia/Kolkata');
+                Integer  offsetMs = istTz.getOffset(asGmt);
                 return asGmt.addSeconds(-(offsetMs / 1000));
             }
             return (DateTime) JSON.deserialize('"' + s + '"', DateTime.class);
@@ -49,9 +51,10 @@ public with sharing class BookingController {
     public static List<BookingWrapper> getBookings() {
         List<Booking__c> rows = [
             SELECT Id, Name, Room_Name__c, Room_Name__r.Name,
-                   Employee_Name__c, Start_Time__c, End_Time__c, Status__c
+                   Employee_Name__c, Start_Time__c, End_Time__c, Status__c,
+                   Meeting_Link__c
             FROM Booking__c
-            WHERE Status__c = 'Booked'
+            WHERE Status__c NOT IN ('Canceled', 'Cancelled', 'Rejected')
             ORDER BY Start_Time__c ASC
             LIMIT 200
         ];
@@ -63,13 +66,16 @@ public with sharing class BookingController {
     @AuraEnabled
     public static Boolean checkAvailability(String roomId, String startTime, String endTime) {
         try {
+            // Check permission first
+            RoomPermissionService.enforceRoomPermission(roomId);
+
             DateTime startDT = parseDateTime(startTime);
             DateTime endDT   = parseDateTime(endTime);
             DateTime nowDT   = DateTime.now(); // must be a variable — :DateTime.now() is invalid SOQL
             List<Booking__c> conflicts = [
                 SELECT Id FROM Booking__c
                 WHERE Room_Name__c = :roomId
-                  AND Status__c    = 'Booked'
+                  AND Status__c    IN ('Booked', 'Pending Approval', 'Approved')
                   AND Start_Time__c < :endDT
                   AND End_Time__c   > :startDT
                   AND End_Time__c   > :nowDT
@@ -83,8 +89,12 @@ public with sharing class BookingController {
 
     @AuraEnabled
     public static Booking__c createBooking(
-            String roomId, String employeeName, String startTime, String endTime) {
+            String roomId, String employeeName, String startTime, String endTime,
+            String employeeEmail) {
         try {
+            // Enforce room permission — throws AuraHandledException if not allowed
+            RoomPermissionService.enforceRoomPermission(roomId);
+
             DateTime startDT = parseDateTime(startTime);
             DateTime endDT   = parseDateTime(endTime);
 
@@ -98,7 +108,7 @@ public with sharing class BookingController {
             List<Booking__c> conflicts = [
                 SELECT Id FROM Booking__c
                 WHERE Room_Name__c = :roomId
-                  AND Status__c    = 'Booked'
+                  AND Status__c    IN ('Booked', 'Pending Approval')
                   AND Start_Time__c < :endDT
                   AND End_Time__c   > :startDT
                   AND End_Time__c   > :nowDT
@@ -110,7 +120,7 @@ public with sharing class BookingController {
                     SELECT Name, Employee_Name__c, Start_Time__c, End_Time__c
                     FROM Booking__c WHERE Id = :conflicts[0].Id LIMIT 1
                 ];
-                String tzId       = UserInfo.getTimeZone().getID();
+                String tzId       = 'Asia/Kolkata'; // always use org timezone (IST) — not user's local tz
                 String clashStart = clash.Start_Time__c.format('dd-MM-yyyy hh:mm a', tzId);
                 String clashEnd   = clash.End_Time__c.format('hh:mm a', tzId);
                 throw new AuraHandledException(
@@ -127,6 +137,36 @@ public with sharing class BookingController {
                 Status__c        = 'Booked'
             );
             insert rec;
+
+            // Generate Jitsi Meet link instantly — no API needed, always works
+            rec.Meeting_Link__c = JitsiMeetService.generateLink(rec.Id, rec.Employee_Name__c);
+            update rec;
+
+            // Re-query to get full record including Meeting_Link__c for LWC wrapper
+            rec = [SELECT Id, Name, Room_Name__c, Room_Name__r.Name,
+                          Employee_Name__c, Start_Time__c, End_Time__c,
+                          Status__c, Meeting_Link__c
+                   FROM Booking__c WHERE Id = :rec.Id LIMIT 1];
+
+            // Check if room requires approval — submit if so
+            RoomPermissionService.PermissionResult perm =
+                RoomPermissionService.checkRoomPermission(roomId);
+            if (perm.requiresApproval) {
+                // Update status to Pending Approval before submitting
+                rec.Status__c = 'Pending Approval';
+                update rec;
+                BookingApprovalService.sendApprovalRequestEmailPublic(rec.Id);
+                BookingApprovalService.submitForApproval(rec.Id);
+                // Re-query after status update
+                rec = [SELECT Id, Name, Room_Name__c, Room_Name__r.Name,
+                              Employee_Name__c, Start_Time__c, End_Time__c,
+                              Status__c, Meeting_Link__c
+                       FROM Booking__c WHERE Id = :rec.Id LIMIT 1];
+            } else {
+                // Send confirmation email only for non-approval bookings
+                BookingEmailService.sendBookingConfirmation(rec, employeeEmail);
+            }
+
             return rec;
 
         } catch (AuraHandledException e) {
@@ -156,6 +196,14 @@ public with sharing class BookingController {
         }
     }
 
+    @AuraEnabled(cacheable=false)
+    public static String getMeetingLink(String bookingId) {
+        List<Booking__c> rows = [
+            SELECT Meeting_Link__c FROM Booking__c WHERE Id = :bookingId LIMIT 1
+        ];
+        return rows.isEmpty() ? null : rows[0].Meeting_Link__c;
+    }
+
     public class BookingWrapper {
         @AuraEnabled public String Id;
         @AuraEnabled public String Name;
@@ -170,6 +218,7 @@ public with sharing class BookingController {
         // Local datetime strings in YYYY-MM-DD HH:mm format — used by JS for calendar matching
         @AuraEnabled public String StartLocal;
         @AuraEnabled public String EndLocal;
+        @AuraEnabled public String MeetingLink;
 
         public BookingWrapper(Booking__c b) {
             this.Id           = b.Id;
@@ -180,11 +229,12 @@ public with sharing class BookingController {
             this.Status       = b.Status__c;
             this.StartTimeMs  = b.Start_Time__c.getTime();
             this.EndTimeMs    = b.End_Time__c.getTime();
-            String tzId       = UserInfo.getTimeZone().getID(); // org TZ is now IST
+            String tzId       = 'Asia/Kolkata'; // always use org timezone (IST) — not user's local tz
             this.StartLocal   = b.Start_Time__c.format('yyyy-MM-dd HH:mm', tzId);
             this.EndLocal     = b.End_Time__c.format(  'yyyy-MM-dd HH:mm', tzId);
             this.DisplayStart = b.Start_Time__c.format('dd-MM-yyyy hh:mm a', tzId);
             this.DisplayEnd   = b.End_Time__c.format(  'dd-MM-yyyy hh:mm a', tzId);
+            this.MeetingLink  = b.Meeting_Link__c;
         }
     }
 

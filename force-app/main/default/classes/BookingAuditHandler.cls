@@ -1,6 +1,6 @@
 public with sharing class BookingAuditHandler {
 
-    private static final String IST = UserInfo.getTimeZone().getID(); // org TZ is now IST
+    private static final Integer IST_OFFSET_SECONDS = 19800; // UTC+5:30 for date filter
 
     // ── Entry point called from trigger ──────────────────────────────────────
     public static void handle(
@@ -13,14 +13,11 @@ public with sharing class BookingAuditHandler {
         List<Booking_Audit__c> logs = new List<Booking_Audit__c>();
 
         if (op == System.TriggerOperation.AFTER_INSERT) {
-
             for (Booking__c b : newList) {
                 logs.add(buildLog(b, null, 'Created'));
             }
         }
-
         else if (op == System.TriggerOperation.AFTER_UPDATE) {
-
             for (Booking__c b : newList) {
                 Booking__c old = oldMap.get(b.Id);
                 List<String> changed = getChangedFields(b, old);
@@ -31,14 +28,11 @@ public with sharing class BookingAuditHandler {
                 }
             }
         }
-
         else if (op == System.TriggerOperation.AFTER_DELETE) {
-
             for (Booking__c b : oldList) {
                 logs.add(buildLog(null, b, 'Deleted'));
             }
         }
-
         else if (op == System.TriggerOperation.AFTER_UNDELETE) {
             for (Booking__c b : newList) {
                 logs.add(buildLog(b, null, 'Restored'));
@@ -50,12 +44,11 @@ public with sharing class BookingAuditHandler {
         }
     }
 
-    // Safely read room name — trigger re-queries with Room_Name__r so this is populated
+    // ── Safely read room name from relationship field ─────────────────────────
     private static String resolveRoomName(Booking__c b) {
         if (b.Room_Name__r != null && String.isNotBlank(b.Room_Name__r.Name)) {
             return b.Room_Name__r.Name;
         }
-        // Fallback: query if relationship wasn't loaded (e.g. undelete)
         if (b.Room_Name__c != null) {
             List<Meeting_Room__c> rooms = [SELECT Name FROM Meeting_Room__c WHERE Id = :b.Room_Name__c LIMIT 1];
             return rooms.isEmpty() ? '' : rooms[0].Name;
@@ -80,7 +73,7 @@ public with sharing class BookingAuditHandler {
             Employee_Name__c   = src.Employee_Name__c
         );
 
-        // Only link to booking for non-delete actions — deleted records cause ENTITY_IS_DELETED
+        // Link to booking (only for non-delete — deleted records throw ENTITY_IS_DELETED)
         if (src.Id != null && action != 'Deleted') {
             log.Booking__c = src.Id;
         }
@@ -99,24 +92,20 @@ public with sharing class BookingAuditHandler {
             log.New_Status__c     = newRec.Status__c;
         }
 
-        // Store IST-formatted time in Changed_Fields__c — always human-readable
-        // regardless of org timezone display settings
-        String tzId = UserInfo.getTimeZone().getID();
+        // Human-readable IST time in Changed_Fields__c
+        TimeZone tz = UserInfo.getTimeZone();
         if (action == 'Created') {
-            String startIST = newRec != null && newRec.Start_Time__c != null
-                ? newRec.Start_Time__c.format('dd-MM-yyyy hh:mm a', tzId) : '';
-            String endIST   = newRec != null && newRec.End_Time__c != null
-                ? newRec.End_Time__c.format('hh:mm a', tzId) : '';
-            log.Changed_Fields__c = startIST + ' → ' + endIST;
+            String startStr = newRec != null && newRec.Start_Time__c != null
+                ? newRec.Start_Time__c.format('dd-MM-yyyy hh:mm a', tz.getID()) : '';
+            String endStr   = newRec != null && newRec.End_Time__c != null
+                ? newRec.End_Time__c.format('hh:mm a', tz.getID()) : '';
+            log.Changed_Fields__c = startStr + ' \u2192 ' + endStr;
         } else if (action == 'Deleted') {
-            String startIST = oldRec != null && oldRec.Start_Time__c != null
-                ? oldRec.Start_Time__c.format('dd-MM-yyyy hh:mm a', tzId) : '';
-            String endIST   = oldRec != null && oldRec.End_Time__c != null
-                ? oldRec.End_Time__c.format('hh:mm a', tzId) : '';
-            log.Changed_Fields__c = 'Canceled: ' + startIST + ' → ' + endIST;
-        } else if (action == 'Updated') {
-            // Changed_Fields__c is set by caller with field names
-            // Append old→new time if time changed
+            String startStr = oldRec != null && oldRec.Start_Time__c != null
+                ? oldRec.Start_Time__c.format('dd-MM-yyyy hh:mm a', tz.getID()) : '';
+            String endStr   = oldRec != null && oldRec.End_Time__c != null
+                ? oldRec.End_Time__c.format('hh:mm a', tz.getID()) : '';
+            log.Changed_Fields__c = 'Canceled: ' + startStr + ' \u2192 ' + endStr;
         }
 
         return log;
@@ -149,7 +138,7 @@ public with sharing class BookingAuditHandler {
         ];
     }
 
-    // ── LWC: fetch all audit logs (for the admin Audit Log tab) ──────────────
+    // ── LWC: fetch all audit logs ─────────────────────────────────────────────
     @AuraEnabled(cacheable=false)
     public static List<AuditWrapper> getAllAuditLogs(
         Integer pageSize,
@@ -174,14 +163,13 @@ public with sharing class BookingAuditHandler {
             query += 'AND Changed_By__c LIKE \'%' + String.escapeSingleQuotes(filterUser) + '%\' ';
         }
         if (String.isNotBlank(filterDate)) {
-            // Org TZ is now IST — newInstanceGmt minus IST offset gives correct UTC boundaries
             List<String> dp = filterDate.split('-');
             DateTime istMidnight = DateTime.newInstanceGmt(
                 Integer.valueOf(dp[0]), Integer.valueOf(dp[1]), Integer.valueOf(dp[2]), 0, 0, 0);
             DateTime utcStart = istMidnight.addSeconds(-IST_OFFSET_SECONDS);
             DateTime utcEnd   = utcStart.addDays(1);
-            query += 'AND Timestamp__c >= ' + utcStart.formatGmt('yyyy-MM-dd'T'HH:mm:ss'Z'') + ' ' +
-                     'AND Timestamp__c <  ' + utcEnd.formatGmt('yyyy-MM-dd'T'HH:mm:ss'Z'') + ' ';
+            query += 'AND Timestamp__c >= ' + toSoqlDatetime(utcStart) + ' ' +
+                     'AND Timestamp__c <  ' + toSoqlDatetime(utcEnd) + ' ';
         }
 
         query += 'ORDER BY Timestamp__c DESC ' +
@@ -203,8 +191,7 @@ public with sharing class BookingAuditHandler {
         String filterUser,
         String filterDate
     ) {
-        String query =
-            'SELECT COUNT() FROM Booking_Audit__c WHERE Id != null ';
+        String query = 'SELECT COUNT() FROM Booking_Audit__c WHERE Id != null ';
         if (String.isNotBlank(filterAction) && filterAction != 'All') {
             query += 'AND Action__c = \'' + String.escapeSingleQuotes(filterAction) + '\' ';
         }
@@ -212,38 +199,47 @@ public with sharing class BookingAuditHandler {
             query += 'AND Changed_By__c LIKE \'%' + String.escapeSingleQuotes(filterUser) + '%\' ';
         }
         if (String.isNotBlank(filterDate)) {
-            // filterDate is YYYY-MM-DD in IST. IST = UTC+5:30, so IST midnight = UTC 18:30 prev day.
-            // We use DateTime arithmetic to get correct UTC boundaries for the IST day.
             List<String> dp = filterDate.split('-');
-            DateTime istDayStart = DateTime.newInstanceGmt(
+            DateTime istMidnight = DateTime.newInstanceGmt(
                 Integer.valueOf(dp[0]), Integer.valueOf(dp[1]), Integer.valueOf(dp[2]), 0, 0, 0);
-            DateTime utcStart = istDayStart.addSeconds(-IST_OFFSET_SECONDS); // IST midnight in UTC
+            DateTime utcStart = istMidnight.addSeconds(-IST_OFFSET_SECONDS);
             DateTime utcEnd   = utcStart.addDays(1);
-            query += 'AND Timestamp__c >= ' + utcStart.formatGmt('yyyy-MM-dd'T'HH:mm:ss'Z'') + ' ' +
-                     'AND Timestamp__c <  ' + utcEnd.formatGmt('yyyy-MM-dd'T'HH:mm:ss'Z'') + ' ';
+            query += 'AND Timestamp__c >= ' + toSoqlDatetime(utcStart) + ' ' +
+                     'AND Timestamp__c <  ' + toSoqlDatetime(utcEnd) + ' ';
         }
         return Database.countQuery(query);
     }
 
+    // ── Format DateTime as SOQL-safe UTC string e.g. 2026-05-28T04:00:00Z ─────
+    private static String toSoqlDatetime(DateTime dt) {
+        return dt.year()   + '-' +
+               String.valueOf(dt.month()).leftPad(2,'0')  + '-' +
+               String.valueOf(dt.day()).leftPad(2,'0')    + 'T' +
+               String.valueOf(dt.hourGmt()).leftPad(2,'0')   + ':' +
+               String.valueOf(dt.minuteGmt()).leftPad(2,'0') + ':' +
+               String.valueOf(dt.secondGmt()).leftPad(2,'0') + 'Z';
+    }
+
     // ── Wrapper for LWC serialization ─────────────────────────────────────────
     public class AuditWrapper {
-        @AuraEnabled public String   Id;
-        @AuraEnabled public String   BookingName;
-        @AuraEnabled public String   Action;
-        @AuraEnabled public String   ChangedBy;
-        @AuraEnabled public String   RoomName;
-        @AuraEnabled public String   EmployeeName;
-        @AuraEnabled public String   ChangedFields;
-        @AuraEnabled public String   OldStatus;
-        @AuraEnabled public String   NewStatus;
-        @AuraEnabled public String   OldStartTime;
-        @AuraEnabled public String   NewStartTime;
-        @AuraEnabled public String   OldEndTime;
-        @AuraEnabled public String   NewEndTime;
-        @AuraEnabled public String   TimestampDisplay;
-        @AuraEnabled public Long     TimestampMs;
+        @AuraEnabled public String Id;
+        @AuraEnabled public String BookingName;
+        @AuraEnabled public String Action;
+        @AuraEnabled public String ChangedBy;
+        @AuraEnabled public String RoomName;
+        @AuraEnabled public String EmployeeName;
+        @AuraEnabled public String ChangedFields;
+        @AuraEnabled public String OldStatus;
+        @AuraEnabled public String NewStatus;
+        @AuraEnabled public String OldStartTime;
+        @AuraEnabled public String NewStartTime;
+        @AuraEnabled public String OldEndTime;
+        @AuraEnabled public String NewEndTime;
+        @AuraEnabled public String TimestampDisplay;
+        @AuraEnabled public Long   TimestampMs;
 
         public AuditWrapper(Booking_Audit__c r) {
+            TimeZone tz = UserInfo.getTimeZone();
             this.Id               = r.Id;
             this.BookingName      = r.Booking__r != null ? r.Booking__r.Name : '—';
             this.Action           = r.Action__c;
@@ -253,16 +249,16 @@ public with sharing class BookingAuditHandler {
             this.ChangedFields    = r.Changed_Fields__c;
             this.OldStatus        = r.Old_Status__c;
             this.NewStatus        = r.New_Status__c;
-            this.TimestampDisplay = r.Timestamp__c.format('dd-MM-yyyy HH:mm:ss', IST);
+            this.TimestampDisplay = r.Timestamp__c.format('dd-MM-yyyy HH:mm:ss', tz.getID());
             this.TimestampMs      = r.Timestamp__c.getTime();
             if (r.Old_Start_Time__c != null)
-                this.OldStartTime = r.Old_Start_Time__c.format('dd-MM-yyyy HH:mm', IST);
+                this.OldStartTime = r.Old_Start_Time__c.format('dd-MM-yyyy HH:mm', tz.getID());
             if (r.New_Start_Time__c != null)
-                this.NewStartTime = r.New_Start_Time__c.format('dd-MM-yyyy HH:mm', IST);
+                this.NewStartTime = r.New_Start_Time__c.format('dd-MM-yyyy HH:mm', tz.getID());
             if (r.Old_End_Time__c   != null)
-                this.OldEndTime   = r.Old_End_Time__c.format('dd-MM-yyyy HH:mm', IST);
+                this.OldEndTime   = r.Old_End_Time__c.format('dd-MM-yyyy HH:mm', tz.getID());
             if (r.New_End_Time__c   != null)
-                this.NewEndTime   = r.New_End_Time__c.format('dd-MM-yyyy HH:mm', IST);
+                this.NewEndTime   = r.New_End_Time__c.format('dd-MM-yyyy HH:mm', tz.getID());
         }
     }
 }

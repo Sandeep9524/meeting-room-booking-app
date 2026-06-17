@@ -56,6 +56,12 @@
                                                     <div class="booking-time">{cell.timeRange}</div>
                                                 </div>
                                             </template>
+                                            <template if:true={cell.restricted}>
+                                                <div class="booking-info">
+                                                    <div class="booking-title restrict-icon">🔒</div>
+                                                </div>
+                                            </template>
+
                                         </div>
                                     </template>
                                 </div>
@@ -67,7 +73,8 @@
                             <div class="slds-col">
                                 <span class="legend-item"><span class="legend-box available"></span> Available</span>
                                 <span class="legend-item"><span class="legend-box booked"></span> Booked</span>
-                                <span class="legend-item"><span class="legend-box selected"></span> Selected</span>
+                                <span class="legend-item"><span class="legend-box restricted"></span> 🔒 Restricted</span>
+                                <span class="legend-item"><span class="legend-box needs-approval"></span> ⏳ Needs Approval</span>
                             </div>
                         </div>
                     </div>
@@ -97,11 +104,21 @@
                                         onchange={handleRoomPick} required>
                                     </lightning-combobox>
                                 </div>
-                                <div class="slds-col slds-size_1-of-2">
+                                <div class="slds-col slds-size_1-of-4">
                                     <lightning-input label="Employee Name"
                                         value={formData.employeeName}
                                         onchange={handleFormChange}
                                         data-field="employeeName" required>
+                                    </lightning-input>
+                                </div>
+                                <div class="slds-col slds-size_1-of-4">
+                                    <lightning-input
+                                        type="email"
+                                        label="Employee Email"
+                                        value={formData.employeeEmail}
+                                        onchange={handleFormChange}
+                                        data-field="employeeEmail"
+                                        placeholder="attendee@company.com">
                                     </lightning-input>
                                 </div>
 
@@ -167,6 +184,13 @@
                             <div class="slds-box slds-theme_success slds-m-top_medium">
                                 <p><lightning-icon icon-name="utility:success" size="small"
                                     class="slds-m-right_x-small"></lightning-icon> {successMessage}</p>
+                                <template if:true={newBookingMeetingLink}>
+                                    <p class="slds-m-top_x-small">
+                                        <a href={newBookingMeetingLink} target="_blank" class="teams-link-success">
+                                            &#128248; Join Teams Meeting
+                                        </a>
+                                    </p>
+                                </template>
                             </div>
                         </template>
                     </div>
@@ -232,6 +256,7 @@
                                                 <span>Status</span>
                                                 <span class={sortIconClass.Status}>{sortIcon.Status}</span>
                                             </th>
+                                            <th>Meeting Link</th>
                                             <th>Action</th>
                                         </tr>
                                     </thead>
@@ -245,6 +270,17 @@
                                                 <td class="booking-time">{b.DisplayEnd}</td>
                                                 <td>
                                                     <span class={b.statusClass}>{b.Status}</span>
+                                                </td>
+                                                <td>
+                                                    <template if:true={b.MeetingLink}>
+                                                        <a href={b.MeetingLink} target="_blank"
+                                                            class="teams-link" title="Join Teams Meeting">
+                                                            &#128248; Join
+                                                        </a>
+                                                    </template>
+                                                    <template if:false={b.MeetingLink}>
+                                                        <span class="link-pending" title="Link generating...">⏳</span>
+                                                    </template>
                                                 </td>
                                                 <td>
                                                     <button
@@ -276,6 +312,7 @@
                         </template>
                     </div>
                 </lightning-tab>
+
 
 
                 <!-- ── Audit Log ── -->
@@ -390,6 +427,94 @@
                         </template>
                     </div>
                 </lightning-tab>
+
+                <!-- ── Approvals ── -->
+                <lightning-tab label="Approvals" value="approvals">
+                    <div class="slds-box slds-theme_default">
+                        <div class="slds-grid slds-gutters slds-m-bottom_medium">
+                            <div class="slds-col">
+                                <h3 class="slds-text-heading_small">Pending Board Room Approvals</h3>
+                                <p class="slds-text-body_small slds-text-color_weak">{pendingApprovalCount} pending</p>
+                            </div>
+                            <div class="slds-col slds-text-align_right">
+                                <lightning-button label="Refresh" onclick={loadPendingApprovals}
+                                    icon-name="utility:refresh" variant="neutral">
+                                </lightning-button>
+                            </div>
+                        </div>
+
+                        <template if:true={hasPendingApprovals}>
+                            <div class="approvals-list">
+                                <template for:each={pendingApprovals} for:item="appr">
+                                    <div key={appr.BookingId} class="approval-card">
+                                        <div class="approval-info">
+                                            <div class="approval-booking">{appr.BookingName}</div>
+                                            <div class="approval-meta">
+                                                <span class="approval-room">{appr.RoomName}</span>
+                                                <span class="approval-sep">·</span>
+                                                <span>{appr.EmployeeName}</span>
+                                                <span class="approval-sep">·</span>
+                                                <span>{appr.StartTime} – {appr.EndTime}</span>
+                                            </div>
+                                            <template if:true={appr.PendingWith}>
+                                                <div class="approval-pending-with">Pending with: {appr.PendingWith}</div>
+                                            </template>
+                                        </div>
+                                        <div class="approval-actions">
+                                            <button class="approve-btn"
+                                                data-id={appr.BookingId}
+                                                onclick={handleApprove}
+                                                disabled={isLoading}>
+                                                ✓ Approve
+                                            </button>
+                                            <button class="reject-btn"
+                                                data-id={appr.BookingId}
+                                                onclick={handleReject}
+                                                disabled={isLoading}>
+                                                ✕ Reject
+                                            </button>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+
+                        <template if:false={hasPendingApprovals}>
+                            <div class="slds-text-align_center slds-p-vertical_large">
+                                <p class="slds-text-color_weak">No pending approvals</p>
+                            </div>
+                        </template>
+                    </div>
+                </lightning-tab>
+
+                <!-- ── Reject Modal ── -->
+                <template if:true={showRejectModal}>
+                    <div class="cancel-modal-backdrop" onclick={handleRejectModalClose}></div>
+                    <div class="cancel-modal" role="dialog">
+                        <div class="cancel-modal-header">
+                            <span class="cancel-modal-title">Reject Booking</span>
+                            <button class="cancel-modal-close" onclick={handleRejectModalClose}>✕</button>
+                        </div>
+                        <div class="cancel-modal-body">
+                            <p>Add a reason for rejection (optional):</p>
+                            <lightning-textarea
+                                label="Comments"
+                                value={rejectComments}
+                                onchange={handleRejectCommentsChange}
+                                max-length="500"
+                                class="slds-m-top_small">
+                            </lightning-textarea>
+                        </div>
+                        <div class="cancel-modal-footer">
+                            <lightning-button label="Cancel" variant="neutral"
+                                onclick={handleRejectModalClose} class="slds-m-right_small">
+                            </lightning-button>
+                            <lightning-button label="Confirm Reject" variant="destructive"
+                                onclick={handleRejectConfirm}>
+                            </lightning-button>
+                        </div>
+                    </div>
+                </template>
             </lightning-tabset>
         </div>
         <template if:true={isLoading}>

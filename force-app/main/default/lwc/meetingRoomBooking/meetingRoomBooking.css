@@ -458,3 +458,136 @@ lightning-spinner {
   color: #fff;
   font-size: 0.75rem;
 }
+
+/* ── Teams meeting link ──────────────────────────────────────────────────── */
+.teams-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #6264A7;
+  text-decoration: none;
+  padding: 2px 10px;
+  border: 1px solid #6264A7;
+  border-radius: 20px;
+  white-space: nowrap;
+  transition: background 120ms;
+}
+.teams-link:hover { background: #f0f0fa; }
+.link-pending {
+  font-size: 0.85rem;
+  color: #aaa;
+  cursor: default;
+}
+.teams-link-success {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #6264A7;
+  text-decoration: none;
+  padding: 4px 14px;
+  border: 1px solid #6264A7;
+  border-radius: 20px;
+}
+.teams-link-success:hover { background: #f0f0fa; }
+
+/* ── Room permission states ──────────────────────────────────────────────── */
+.calendar-cell.restricted {
+  background: #fef0f0;
+  border-color: #e0a0a0;
+  box-shadow: inset 3px 0 0 #c23934;
+  cursor: not-allowed;
+}
+.calendar-cell.restricted:hover {
+  background: #fce4e4;
+}
+.calendar-cell.needs-approval {
+  background: #fdf6e3;
+  border-color: #f0c040;
+  box-shadow: inset 3px 0 0 #f0a000;
+  cursor: pointer;
+}
+.calendar-cell.needs-approval:hover {
+  background: #fef0c0;
+}
+.restrict-icon {
+  font-size: 1rem;
+  opacity: 0.6;
+}
+.approval-icon {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #8a6000;
+}
+.legend-box.restricted    { background: #fef0f0; border-color: #e0a0a0; box-shadow: inset 3px 0 0 #c23934; }
+.legend-box.needs-approval{ background: #fdf6e3; border-color: #f0c040; box-shadow: inset 3px 0 0 #f0a000; }
+
+/* ── Approvals tab ───────────────────────────────────────────────────────── */
+.approvals-list { display: flex; flex-direction: column; gap: .625rem; }
+.approval-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .875rem 1rem;
+  border: 1px solid #e3e6ea;
+  border-left: 4px solid #f0a000;
+  border-radius: .375rem;
+  background: #fff;
+  gap: 1rem;
+}
+.approval-info { flex: 1; min-width: 0; }
+.approval-booking { font-size: .875rem; font-weight: 600; color: #032d60; }
+.approval-meta { font-size: .78rem; color: #706e6b; margin-top: .2rem; }
+.approval-sep { margin: 0 .3rem; color: #ccc; }
+.approval-pending-with { font-size: .75rem; color: #f0a000; margin-top: .25rem; font-weight: 500; }
+.approval-actions { display: flex; gap: .5rem; flex-shrink: 0; }
+.approve-btn {
+  padding: 4px 14px; font-size: .8rem; font-weight: 600;
+  color: #2e844a; background: #fff; border: 1px solid #2e844a;
+  border-radius: 20px; cursor: pointer; transition: background 120ms;
+}
+.approve-btn:hover:not(:disabled) { background: #e9f7ee; }
+.reject-btn {
+  padding: 4px 14px; font-size: .8rem; font-weight: 600;
+  color: #c23934; background: #fff; border: 1px solid #c23934;
+  border-radius: 20px; cursor: pointer; transition: background 120ms;
+}
+.reject-btn:hover:not(:disabled) { background: #fcebeb; }
+.approve-btn:disabled, .reject-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ── Pending approval calendar cell ─────────────────────────────────────── */
+.calendar-cell.pending-approval {
+  background: #fdf6e3;
+  border-color: #f0c040;
+  box-shadow: inset 3px 0 0 #f0a000;
+  cursor: not-allowed;
+}
+.calendar-cell.pending-approval:hover { background: #fef0c0; }
+
+/* ── Approved status ─────────────────────────────────────────────────────── */
+.calendar-cell.approved {
+  background: #e9f7ee;
+  border-color: #4bca81;
+  box-shadow: inset 3px 0 0 #2e844a;
+}
+.status-approved {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: #e9f7ee;
+  color: #2e844a;
+}
+.status-pending {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: #fdf6e3;
+  color: #854F0B;
+}
